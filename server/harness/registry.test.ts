@@ -74,6 +74,23 @@ describe("ProviderRegistry", () => {
     expect(described.access).toBe("custom");
   });
 
+  it("publishes a terminal login with the instance CLI", async () => {
+    const fake = makeFakeDriver();
+    Object.assign(fake.driver, {
+      defaultConfig: () => ({ cli: "fakebin" }),
+      login: { args: ["auth", "login", "{provider}"], prompt: "Provider" },
+    });
+    const registry = new ProviderRegistry([fake.driver]);
+    await registry.load({
+      defaulted: { driver: "fake" },
+      overridden: { driver: "fake", config: { cli: "/opt/fake/custom-bin" } },
+    });
+
+    const described = Object.fromEntries((await registry.describe()).map((d) => [d.instanceId, d]));
+    expect(described.defaulted.login).toMatchObject({ command: "fakebin", args: ["auth", "login", "{provider}"] });
+    expect(described.overridden.login).toMatchObject({ command: "/opt/fake/custom-bin" });
+  });
+
   it("keeps an unknown driver as an unavailable shadow instead of failing", async () => {
     const registry = new ProviderRegistry([makeFakeDriver().driver]);
     await registry.load({ mystery: { driver: "from-the-future", displayName: "Tomorrow" } });

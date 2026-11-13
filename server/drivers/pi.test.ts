@@ -261,6 +261,10 @@ describe("PiDriver config + install", () => {
       needsNode: true,
     });
     expect(PiDriver.metadata).toMatchObject({ displayName: "pi", access: "custom" });
+    expect(PiDriver.login).toMatchObject({
+      args: ["auth", "login", "{provider}"],
+      prompt: expect.stringContaining("provider"),
+    });
   });
 });
 

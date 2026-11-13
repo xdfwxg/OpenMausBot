@@ -371,6 +371,11 @@ export const PiDriver: ProviderDriver<PiConfig> = {
     needsNode: true,
     docsUrl: "https://pi.dev",
   },
+  login: {
+    args: ["auth", "login", "{provider}"],
+    prompt: "Pi provider (anthropic / openai / deepseek / ...)",
+    note: "完成。重启 Lodge 后 Pi 模型会出现；按回车关闭…",
+  },
   models: EMPTY,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),

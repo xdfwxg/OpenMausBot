@@ -46,6 +46,11 @@ function withServerInstall(install: AnyProviderDriver["install"], npmPresent: bo
   return { ...clientInstall(install), platform, ...(server ? { server } : {}), ...(appCopy ? { signInCommand: undefined, appCopy: true } : {}) };
 }
 
+function withLoginCommand(login: AnyProviderDriver["login"], cli: string | undefined): AnyProviderDriver["login"] {
+  if (!login) return undefined;
+  return { ...login, ...(cli ? { command: cli } : {}) };
+}
+
 type InstallStandalone = (release: StandaloneRelease, options: { baseDir?: string }) => Promise<StandaloneInstalled>;
 
 /** Installed; `useCli` when the copy this engine's CLI finds does not start and it should run the app's own copy instead. */
@@ -521,6 +526,7 @@ export class ProviderRegistry {
             capabilities: { computerMcp: false, agentsMcp: false, localComputerMcp: false },
             access: driver?.metadata.access ?? "subscription",
             install: withServerInstall(driver?.install, npmPresent),
+            login: withLoginCommand(driver?.login, entry.shadow.cli ?? cliDefaultOf(driver)),
             cli: entry.shadow.cli,
             cliDefault: cliDefaultOf(driver),
             cliCandidates: candidatesFor(driver),
@@ -555,6 +561,7 @@ export class ProviderRegistry {
           },
           access: driver?.metadata.access ?? "subscription",
           install: withServerInstall(driver?.install, npmPresent, this.appStandaloneCopy(driver, cli ?? cliDefaultOf(driver))),
+          login: withLoginCommand(driver?.login, cli ?? cliDefaultOf(driver)),
           authentication: inst.startAuthentication
             ? {
                 method: inst.authenticationMethod ?? (inst.getAuthentication && inst.completeAuthentication

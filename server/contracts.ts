@@ -412,6 +412,15 @@ export interface EngineInstall {
   appCopy?: boolean;
 }
 
+/** How a CLI engine signs in when its own login is an interactive terminal step, not an in-app auth flow.
+ *  The registry fills `command` with the instance's resolved CLI; `{provider}` is a prompt placeholder. */
+export interface EngineLogin {
+  command?: string;
+  args: string[];
+  prompt?: string;
+  note?: string;
+}
+
 /** What a client may see of an install descriptor: the standalone pins (URLs, hashes) stay on the server. */
 export function clientInstall(install: EngineInstall | undefined): EngineInstall | undefined {
   if (!install) return undefined;
@@ -606,6 +615,8 @@ export interface ProviderDriver<Config = unknown> {
   };
   /** Omit for engines that need no local binary (API-key drivers). */
   readonly install?: EngineInstall;
+  /** Terminal sign-in for a BYOK CLI that has no in-app auth flow. */
+  readonly login?: EngineLogin;
   /** Decode the opaque config envelope; throw on invalid (→ shadow). */
   decodeConfig(raw: unknown): Config;
   defaultConfig(): Config;
