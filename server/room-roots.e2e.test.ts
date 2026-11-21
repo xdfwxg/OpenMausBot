@@ -589,12 +589,6 @@ it("R8 does not follow a member's @ when the room turns followMentions off", () 
   const mira = await f.bot("Mira", "Engineering");
   const room = await f.room("Engineering", [f.clive.id, mira.id], { kind: "member", botId: f.clive.id }, { followMentions: false });
   expect((await f.roomView(room.id)).followMentions).toBe(false);
-  // An existing room can be closed later; this is how old Lodge rooms get the switch on refresh.
-  const legacy = await f.api("POST", "/api/groups", { name: "Lodge setup", memberIds: [f.clive.id] });
-  expect((await f.roomView(legacy.body.group.id)).followMentions).toBe(true);
-  const flipped = await f.api("PATCH", `/api/groups/${legacy.body.group.id}`, { followMentions: false });
-  expect(flipped.status).toBe(200);
-  expect((await f.roomView(legacy.body.group.id)).followMentions).toBe(false);
   f.script(f.clive.id, { key: "Q0", match: ["R8Q-JOB"], reply: "R8Q-C0: @Mira please check." });
   f.script(mira.id, { key: "M1", match: ["R8Q"], reply: "R8Q-M1: should not run." });
   await f.post(room, "R8Q-JOB: handle this.");

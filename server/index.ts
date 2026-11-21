@@ -3710,10 +3710,6 @@ function updateChannel(groupId: string, value: unknown): GroupRecord {
     if (!responder) throw Object.assign(new Error("invalid default responder"), { status: 400 });
     patch.defaultResponder = responder;
   }
-  if (body.followMentions !== undefined) {
-    if (typeof body.followMentions !== "boolean") throw Object.assign(new Error("followMentions must be a boolean"), { status: 400 });
-    patch.followMentions = body.followMentions;
-  }
   if (Object.prototype.hasOwnProperty.call(body, "turnTimeoutMinutes")) {
     if (!existing.dm) {
       throw Object.assign(new Error("set the turn limit on that conversation"), { status: 400 });
