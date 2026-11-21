@@ -842,6 +842,8 @@ export interface WireGroup {
   name: string;
   memberIds: string[];
   defaultResponder: GroupDefaultResponder;
+  /** Follow @names written in member replies and wake those members. Default true; a room whose relay owns the next turn sets false. */
+  followMentions?: boolean;
   /** The room's shared instructions. */
   bulletin: string;
   /** Short one-line description shown under the room name; distinct from

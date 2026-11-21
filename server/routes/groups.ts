@@ -73,7 +73,7 @@ export function createGroupRoutes(deps: GroupRouteDeps): RouteHandler {
         return json(res, 409, { error: "room setup must be finished before the first message" });
       }
 
-      const patch: Partial<Pick<GroupRecord, "cwd" | "defaultResponder" | "bulletin" | "setupCompletedAt" | "setupSkippedAt">> = {};
+      const patch: Partial<Pick<GroupRecord, "cwd" | "defaultResponder" | "followMentions" | "bulletin" | "setupCompletedAt" | "setupSkippedAt">> = {};
       if (body.action === "complete") {
         const checked = validateBotCwd(body.cwd ?? null);
         if (!checked.ok) return json(res, 400, { error: checked.error });
@@ -81,8 +81,12 @@ export function createGroupRoutes(deps: GroupRouteDeps): RouteHandler {
         if (body.bulletin.length > 12_000) return json(res, 400, { error: "bulletin must be at most 12000 characters" });
         const responder = checkedGroupResponder(body.defaultResponder, group.memberIds);
         if (!responder) return json(res, 400, { error: "invalid default responder" });
+        if (body.followMentions !== undefined && typeof body.followMentions !== "boolean") {
+          return json(res, 400, { error: "followMentions must be a boolean" });
+        }
         patch.cwd = checked.cwd ?? undefined;
         patch.defaultResponder = responder;
+        if (typeof body.followMentions === "boolean") patch.followMentions = body.followMentions;
         patch.bulletin = body.bulletin;
         patch.setupCompletedAt = Date.now();
       } else {

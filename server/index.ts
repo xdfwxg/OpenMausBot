@@ -3607,13 +3607,13 @@ function createChannel(value: unknown): GroupRecord {
     }
   }
   let setup:
-    | { bulletin: string; defaultResponder: GroupDefaultResponder; completed: true }
+    | { bulletin: string; defaultResponder: GroupDefaultResponder; followMentions?: boolean; completed: true }
     | undefined;
   if (body.setup !== undefined) {
     if (!body.setup || typeof body.setup !== "object" || Array.isArray(body.setup)) {
       throw Object.assign(new Error("setup must be an object"), { status: 400 });
     }
-    const requested = body.setup as { bulletin?: unknown; defaultResponder?: unknown };
+    const requested = body.setup as { bulletin?: unknown; defaultResponder?: unknown; followMentions?: unknown };
     if (typeof requested.bulletin !== "string") {
       throw Object.assign(new Error("setup.bulletin must be a string"), { status: 400 });
     }
@@ -3622,7 +3622,15 @@ function createChannel(value: unknown): GroupRecord {
     }
     const responder = checkedGroupResponder(requested.defaultResponder, memberIds);
     if (!responder) throw Object.assign(new Error("invalid setup.defaultResponder"), { status: 400 });
-    setup = { bulletin: requested.bulletin, defaultResponder: responder, completed: true };
+    if (requested.followMentions !== undefined && typeof requested.followMentions !== "boolean") {
+      throw Object.assign(new Error("setup.followMentions must be a boolean"), { status: 400 });
+    }
+    setup = {
+      bulletin: requested.bulletin,
+      defaultResponder: responder,
+      ...(requested.followMentions === undefined ? {} : { followMentions: requested.followMentions }),
+      completed: true,
+    };
   }
   return store.createGroup(name, memberIds, false, section, setup ?? (deciderReady(cfg, "roomRouting") ? { defaultResponder: { kind: "auto" } } : undefined));
 }
@@ -3701,6 +3709,10 @@ function updateChannel(groupId: string, value: unknown): GroupRecord {
     const responder = checkedGroupResponder(body.defaultResponder, memberIds);
     if (!responder) throw Object.assign(new Error("invalid default responder"), { status: 400 });
     patch.defaultResponder = responder;
+  }
+  if (body.followMentions !== undefined) {
+    if (typeof body.followMentions !== "boolean") throw Object.assign(new Error("followMentions must be a boolean"), { status: 400 });
+    patch.followMentions = body.followMentions;
   }
   if (Object.prototype.hasOwnProperty.call(body, "turnTimeoutMinutes")) {
     if (!existing.dm) {
@@ -4135,6 +4147,7 @@ function publicGroupState(record: GroupRecord): WireGroup {
     tasks: record.dm ? undefined : tasks,
     // Always present (null when cleared), so a client's shallow merge clears a stale value.
     description: record.description ?? null,
+    followMentions: record.followMentions !== false,
     turnTimeoutMinutes: record.turnTimeoutMinutes ?? null,
     usage: usage ?? null,
     memberContext: roomMemberContexts.forThread(group.threadId) ?? null,
@@ -10488,7 +10501,7 @@ async function runClaimedGroupMemberTurn(
   const roomRoot = coordinator.node(roomRootId);
   const handedOut = roomRoot !== undefined && coordinator.children(roomRootId).some((child) => child.createdAt >= (roomRoot.startedAt ?? 0));
   if (
-    (orchestration?.followMentions ?? true) &&
+    (orchestration?.followMentions ?? group.followMentions ?? true) &&
     roomRoot !== undefined && roomRoot.parentId === undefined &&
     !handedOut &&
     !isCancelled?.() &&

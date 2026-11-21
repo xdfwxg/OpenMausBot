@@ -92,8 +92,8 @@ async function scenario(test: (f: any) => Promise<void>, options: { fake?: Recor
     };
     writeFileSync(planPath, JSON.stringify(plan));
 
-    const room = async (name: string, memberIds: string[], defaultResponder: Responder) => {
-      const created = await api("POST", "/api/groups", { name, memberIds, setup: { bulletin: "", defaultResponder } });
+    const room = async (name: string, memberIds: string[], defaultResponder: Responder, setup: Record<string, unknown> = {}) => {
+      const created = await api("POST", "/api/groups", { name, memberIds, setup: { bulletin: "", defaultResponder, ...setup } });
       expect(created.status, JSON.stringify(created.body)).toBeLessThan(300);
       roomThread = created.body.group.threadId;
       return created.body.group as { id: string; threadId: string };
@@ -584,6 +584,26 @@ it("R8 answers a direct bot @mention again for a bot that already spoke, up to t
   expect(f.turns().map((record: any) => record.planKey)).toEqual(["C0", "M1", "C2", "M3"]);
   expect(nothingLive(f)).toEqual([]);
 }), hostTimeout(90_000));
+
+it("R8 does not follow a member's @ when the room turns followMentions off", () => scenario(async (f) => {
+  const mira = await f.bot("Mira", "Engineering");
+  const room = await f.room("Engineering", [f.clive.id, mira.id], { kind: "member", botId: f.clive.id }, { followMentions: false });
+  expect((await f.roomView(room.id)).followMentions).toBe(false);
+  // An existing room can be closed later; this is how old Lodge rooms get the switch on refresh.
+  const legacy = await f.api("POST", "/api/groups", { name: "Lodge setup", memberIds: [f.clive.id] });
+  expect((await f.roomView(legacy.body.group.id)).followMentions).toBe(true);
+  const flipped = await f.api("PATCH", `/api/groups/${legacy.body.group.id}`, { followMentions: false });
+  expect(flipped.status).toBe(200);
+  expect((await f.roomView(legacy.body.group.id)).followMentions).toBe(false);
+  f.script(f.clive.id, { key: "Q0", match: ["R8Q-JOB"], reply: "R8Q-C0: @Mira please check." });
+  f.script(mira.id, { key: "M1", match: ["R8Q"], reply: "R8Q-M1: should not run." });
+  await f.post(room, "R8Q-JOB: handle this.");
+  await expect.poll(() => f.turns(f.clive.id).length, { timeout: 15_000 }).toBe(1);
+  await expect.poll(() => f.roomRoots(room.threadId)[0]?.status, { timeout: 15_000 }).toBe("completed");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(f.turns(mira.id)).toHaveLength(0);
+  expect(f.roomRoots(room.threadId)).toHaveLength(1);
+}), hostTimeout(60_000));
 
 it("R8 does not run a bot twice for one reply when a nested mention already woke it", () => scenario(async (f) => {
   const mira = await f.bot("Mira", "Engineering");
