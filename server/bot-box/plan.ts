@@ -17,8 +17,8 @@
 //     the egress gate (every connection to the internet goes through it) and the harness gate (only /api/internal/
 //     routes of this server). Nothing else on the server's loopback is reachable. A box that waits for a sign-in callback
 //     also dials out to one more socket, through which the server reaches the box's own loopback, never the other way.
-import { statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readdirSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type BoxNet = "isolated" | "shared";
 
@@ -94,6 +94,8 @@ export interface BoxPlan {
   /** The paths read-write inside, for the self-report and tests. */
   writable: string[];
   botId: string | null;
+  /** Paths the backend hides from reads even though they are readable on the host (Seatbelt only; bubblewrap does not mount them). */
+  readDeny?: string[];
 }
 
 export const IN_BOX_SOCKET_DIR = "/run/omb";
@@ -271,7 +273,23 @@ export function planBox(setup: BoxSetup, request: BoxRequest): BoxPlan {
     if (request.relay) mounts.push({ kind: "bind", source: resolve(request.relay), target: inBoxSocket(RELAY_SOCKET_NAME) });
   }
   if (cwd) options.push("--chdir", cwd);
-  return { mounts, options, net, writable, botId };
+  // Opt-in (OMB_BOT_BOX_DENY_SIBLINGS=1): hide the working folder's sibling folders from reads, so one worker cannot
+  // read another worker's copy that sits beside it. bubblewrap never mounts them; Seatbelt gets an explicit deny.
+  // A sibling a writable mount needs (HOME read-write, a lent folder) stays readable.
+  const readDeny: string[] = [];
+  if (request.env.OMB_BOT_BOX_DENY_SIBLINGS === "1" && cwd !== null) {
+    const parent = dirname(cwd);
+    try {
+      for (const entry of readdirSync(parent, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const path = resolve(parent, entry.name);
+        if (path === cwd) continue;
+        if (writable.some((root) => under(path, root) || under(root, path))) continue;
+        readDeny.push(path);
+      }
+    } catch {}
+  }
+  return { mounts, options, net, writable, botId, readDeny };
 }
 
 /** bubblewrap's argv for the plan (the command follows `--`). */

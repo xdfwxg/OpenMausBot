@@ -63,6 +63,18 @@ describe("Seatbelt profiles", () => {
   it("wraps a command after `--`", () => {
     expect(seatbeltArgs("(version 1)", "/usr/local/bin/claude", ["-p"])).toEqual(["-p", "(version 1)", "--", "/usr/local/bin/claude", "-p"]);
   });
+
+  it("denies reads of the folders the plan hides", () => {
+    const plan: BoxPlan = {
+      mounts: [],
+      options: [],
+      net: "shared",
+      writable: [],
+      botId: null,
+      readDeny: ["/tmp/worker-b"],
+    };
+    expect(seatbeltProfile(plan)).toContain(`(deny file-read* (subpath "/tmp/worker-b"))`);
+  });
 });
 
 describe("BoxRunner with sandbox-exec", () => {
@@ -126,6 +138,25 @@ describe.skipIf(process.platform !== "darwin")("Seatbelt on this Mac", () => {
     spawnSync("/usr/bin/sandbox-exec", seatbeltArgs(seatbeltProfile(plan, { readOnlyHome: home }), "/bin/sh", ["-c", command]), { encoding: "utf8" });
     expect(readFileSync(join(own, "inside"), "utf8").trim()).toBe("ok");
     expect(existsSync(join(home, "outside"))).toBe(false);
+  });
+
+  it("hides a sibling worktree from reads", () => {
+    const root = temp(), own = join(root, "worker-a"), other = join(root, "worker-b");
+    mkdirSync(own);
+    mkdirSync(other);
+    writeFileSync(join(own, "mine.txt"), "mine\n");
+    writeFileSync(join(other, "secret.txt"), "other worker\n");
+    const plan: BoxPlan = {
+      mounts: [{ kind: "bind", source: own, target: own }],
+      options: [],
+      net: "shared",
+      writable: [own],
+      botId: null,
+      readDeny: [other],
+    };
+    const read = (path: string) => spawnSync("/usr/bin/sandbox-exec", seatbeltArgs(seatbeltProfile(plan), "/bin/cat", [path]), { encoding: "utf8" });
+    expect(read(join(own, "mine.txt")).stdout.trim()).toBe("mine");
+    expect(read(join(other, "secret.txt")).stdout).toBe("");
   });
 
   it("hides the data folder and puts this turn's folder back", () => {

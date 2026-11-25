@@ -1,3 +1,5 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -20,6 +22,27 @@ const turn = (mutate?: BoxMutation[]) => planBox(setup(mutate), {
 // The box runs only on a Linux Cloud home (detect.ts says "not-linux" anywhere else): its plan is bubblewrap's argv
 // over POSIX paths, which Windows' path module would write with drive letters and backslashes.
 const linuxBox = describe.skipIf(process.platform === "win32");
+
+describe("sibling read isolation", () => {
+  it("hides the working folder's siblings only when the opt-in is set", () => {
+    const root = mkdtempSync(join(tmpdir(), "omb-siblings-"));
+    try {
+      const own = join(root, "worker-a");
+      const other = join(root, "worker-b");
+      mkdirSync(own);
+      mkdirSync(other);
+      const make = (env: Record<string, string>) => planBox({ dataDir, home, codeRoots: [], engineRoots: [], bridges: [] }, {
+        command: "x", args: [], cwd: own, env,
+      });
+      const hidden = make({ HOME: home, OMB_BOT_BOX_DENY_SIBLINGS: "1" });
+      expect(hidden.readDeny).toContain(other);
+      expect(hidden.readDeny).not.toContain(own);
+      expect(make({ HOME: home }).readDeny).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("explicit read-only grants", () => {
   it("overrides a writable engine profile for its staged skills", () => {

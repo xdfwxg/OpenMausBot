@@ -81,6 +81,12 @@ export function seatbeltProfile(plan: BoxPlan, options: SeatbeltOptions = {}): s
     rules.push(`(deny file-read* file-write* ${subpaths})`);
   }
 
+  // Folders the plan hides from reads (a worker's sibling worktrees): a deny after every grant, because the last
+  // matching rule wins.
+  for (const path of plan.readDeny ?? []) {
+    for (const target of both(path)) rules.push(`(deny file-read* (subpath ${quote(target)}))`);
+  }
+
   // A worktree's .git is how candidates are submitted; the engine may read it, but a boxed turn never edits it.
   for (const root of plan.writable) {
     const git = both(resolve(root, ".git"));
