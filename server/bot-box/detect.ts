@@ -1,19 +1,21 @@
 // Whether this machine can run the bot box, decided once at boot: on by default on a Cloud home, off everywhere else
-// unless OMB_BOT_BOX=1, and never on without a working unprivileged bubblewrap (a kernel that refuses user namespaces,
+// unless OMB_BOT_BOX=1. Linux needs a working unprivileged bubblewrap; macOS uses the system sandbox-exec. (a kernel that refuses user namespaces,
 // or an image without bwrap, reports `off` with its reason rather than running turns unboxed by surprise: the report
 // says so, and the Admin shows it).
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
-export type BoxKind = "bwrap" | "gvisor" | "user" | "off";
+export type BoxKind = "bwrap" | "gvisor" | "user" | "seatbelt" | "off";
 
 export interface BoxDetection {
   box: BoxKind;
   /** Why the box is off, as a fixed code; never free text from a tool. */
-  reason: "switched-off" | "not-linux" | "no-bwrap" | "userns-refused" | "not-cloud" | null;
+  reason: "switched-off" | "not-linux" | "no-bwrap" | "userns-refused" | "no-sandbox-exec" | "not-cloud" | null;
   /** The found tools, when the box is on. */
   tools: { bwrap: string; socat: string | null } | null;
+  /** macOS: the system `sandbox-exec` that renders each turn's Seatbelt profile. */
+  sandboxExec?: string;
 }
 
 export interface DetectInput {
@@ -64,7 +66,14 @@ export function detectBox(input: DetectInput): BoxDetection {
   const wanted = boxWanted(input.env);
   if (wanted === "off") return { box: "off", reason: "switched-off", tools: null };
   if (wanted === "default" && !cloudRole(input.env)) return { box: "off", reason: "not-cloud", tools: null };
-  if ((input.platform ?? process.platform) !== "linux") return { box: "off", reason: "not-linux", tools: null };
+  const platform = input.platform ?? process.platform;
+  if (platform === "darwin") {
+    const which = input.which ?? ((name: string) => whichOnPath(name, input.env));
+    const sandboxExec = which("sandbox-exec");
+    if (!sandboxExec) return { box: "off", reason: "no-sandbox-exec", tools: null };
+    return { box: "seatbelt", reason: null, tools: null, sandboxExec };
+  }
+  if (platform !== "linux") return { box: "off", reason: "not-linux", tools: null };
   const which = input.which ?? ((name) => whichOnPath(name, input.env));
   const bwrap = which("bwrap");
   if (!bwrap) return { box: "off", reason: "no-bwrap", tools: null };

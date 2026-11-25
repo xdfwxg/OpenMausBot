@@ -35,6 +35,8 @@ export interface BoxSetup {
   dataDir: string;
   /** The server's HOME: the engines' logins and settings. */
   home: string;
+  /** macOS only: HOME is readable but not writable for a turn; its own folders are put back by later mounts. */
+  homeReadOnly?: boolean;
   /** Folders of code the box may read: the server's own files, the bots' browser. */
   codeRoots: readonly string[];
   /** Folders of engine code OpenMausBot installed in the data folder, read-only at their own paths; absent ones are skipped. */
@@ -191,8 +193,12 @@ export function planBox(setup: BoxSetup, request: BoxRequest): BoxPlan {
   }
   if (ownHome) rw(ownHome);
   const dataHidden = !mutate.has("bind-data");
-  /** A path is already readable and writable through an earlier line (and not hidden by the data folder's tmpfs). */
-  const covered = (path: string) => (ownHome !== null && under(path, ownHome)) || (writable.some((root) => under(path, root)) && !(dataHidden && under(path, dataDir)));
+  /** A path is already readable and writable through an earlier line (and not hidden by the data folder's tmpfs).
+   * With a read-only HOME, the HOME line grants no writes, so every turn folder under it needs its own line. */
+  const covered = (path: string) => {
+    if (setup.homeReadOnly === true && under(path, home)) return false;
+    return (ownHome !== null && under(path, ownHome)) || (writable.some((root) => under(path, root)) && !(dataHidden && under(path, dataDir)));
+  };
 
   const cwd = request.cwd ? resolve(request.cwd) : null;
   const ids = cwd ? taskWorkspaceIds(cwd, dataDir) : null;

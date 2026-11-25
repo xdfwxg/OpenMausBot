@@ -1,6 +1,6 @@
 // The bot box runtime: one per server. Decides once at boot whether turns are boxed (detect.ts), opens the two gates the
 // boxes reach through unix sockets (egress-gate.ts, harness-gate.ts), and wraps each bot spawn (server/procs.ts spawnCli
-// with owner "bot") in bubblewrap by the plan (plan.ts). Nothing here changes a spawn when the box is off: the command,
+// with owner "bot") in bubblewrap by the plan (plan.ts); macOS gets the same plan as a Seatbelt profile (seatbelt.ts). Nothing here changes a spawn when the box is off: the command,
 // its arguments and its environment go through untouched, so every host that is not a Cloud home behaves as before.
 import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -21,6 +21,7 @@ import { procHidepid } from "./hidepid.ts";
 import { DENIED_SYSCALLS, seccompBytes, seccompSupported } from "./seccomp.ts";
 import { RELAY_SOCKET_NAME, boxUploadsDir, bwrapArgs, inBoxSocket, planBox, taskWorkspaceIds, type BoxBridge, type BoxPlan, type BoxRequest, type BoxSetup } from "./plan.ts";
 import { openBoxRelay, type BoxRelay } from "./relay.ts";
+import { seatbeltArgs, seatbeltProfile } from "./seatbelt.ts";
 
 /** The loopback port inside a box that reaches the egress gate. The harness gate sits at the server's own port. */
 export const BOX_EGRESS_PORT = 3128;
@@ -57,7 +58,9 @@ export interface BoxBroker {
 }
 
 export interface RunnerOptions {
-  bwrap: string;
+  bwrap?: string;
+  /** macOS: `sandbox-exec`, which runs each turn inside the Seatbelt profile built from the same plan. */
+  sandboxExec?: string;
   bridge: BridgeTools;
   setup: BoxSetup;
   /** Names refused in the box's environment whatever the allow-list says: the workspace credentials. */
@@ -89,6 +92,7 @@ export class BoxRunner {
   }
 
   wrap(given: BoxRequest): WrappedSpawn {
+    const seatbelt = this.options.sandboxExec !== undefined;
     const ids = given.cwd ? taskWorkspaceIds(given.cwd, this.options.setup.dataDir) : null;
     const lent = ids ? this.lentTo(ids.botId, ids.threadId) : [];
     // Made before the box starts, so an upload a later turn adds shows up in a box that is still running.
@@ -96,9 +100,11 @@ export class BoxRunner {
       // The bind stays optional, but an upload named later would then be unreadable in this box: say so.
       console.error(`bot box: could not make the uploads folder, so uploads stay unreadable in this box: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const request: BoxRequest = lent.length ? { ...given, rw: [...(given.rw ?? []), ...lent] } : given;
+    const baseRequest: BoxRequest = lent.length ? { ...given, rw: [...(given.rw ?? []), ...lent] } : given;
+    // Seatbelt has no network namespace or socket bridge here: the host's network is what the engine already uses.
+    const request: BoxRequest = seatbelt ? { ...baseRequest, net: "shared" } : baseRequest;
     const extraFds: number[] = [];
-    const seccomp = this.options.seccompFile && !this.options.setup.mutate?.has("no-seccomp") ? this.options.seccompFile : null;
+    const seccomp = !seatbelt && this.options.seccompFile && !this.options.setup.mutate?.has("no-seccomp") ? this.options.seccompFile : null;
     const plan = planBox({ ...this.options.setup, seccompFd: seccomp ? BOX_SECCOMP_FD : undefined }, request);
     const mutate = this.options.setup.mutate;
     const env = mutate?.has("env-all")
@@ -107,6 +113,10 @@ export class BoxRunner {
     // The server's own PATH leaves out the programs in HOME (program-trust.ts); inside the box they are the bot's own.
     const homePrograms = homeProgramDirs(resolve(request.home ?? this.options.setup.home)).filter((dir) => !(env.PATH ?? "").split(":").includes(dir));
     if (homePrograms.length) env.PATH = [...(env.PATH ? [env.PATH] : []), ...homePrograms].join(":");
+    if (seatbelt) {
+      const profile = seatbeltProfile(plan, { readOnlyHome: this.options.setup.homeReadOnly ? this.options.setup.home : undefined });
+      return { command: this.options.sandboxExec!, args: seatbeltArgs(profile, request.command, request.args), env, plan, token: null, release: () => {}, unbrokered: [], extraFds: [] };
+    }
     if (plan.net === "isolated") {
       const proxy = `http://127.0.0.1:${this.options.egressPort ?? BOX_EGRESS_PORT}`;
       for (const name of BOX_PROXY_ENV) env[name] = proxy;
@@ -121,7 +131,7 @@ export class BoxRunner {
       const vouched = (request.allowEnv ?? []).filter((name) => /(?:KEY|TOKEN|SECRET)$/.test(name) && brokered.env[name] !== undefined && brokered.env[name] === request.env[name]);
       const unbrokered = [...new Set([...brokered.unbrokered, ...vouched])];
       if (seccomp) extraFds.push(openSync(seccomp, "r"));
-      return { command: this.options.bwrap, args: [...bwrapArgs(plan), "--", inner.command, ...inner.args], env: brokered.env, plan, token: brokered.token, release: brokered.release, unbrokered, extraFds };
+      return { command: this.options.bwrap!, args: [...bwrapArgs(plan), "--", inner.command, ...inner.args], env: brokered.env, plan, token: brokered.token, release: brokered.release, unbrokered, extraFds };
     } catch (error) {
       for (const fd of extraFds) { try { closeSync(fd); } catch {} }
       brokered.release();
@@ -216,6 +226,30 @@ export class BotBox {
     const env = options.env ?? process.env;
     this.detection = (options.detect ?? ((e) => detectBox({ env: e })))(env);
     const log = options.log ?? ((line: string) => console.log(line));
+    // macOS: a Seatbelt profile per turn from the same plan. No network namespace, socket gates or seccomp here.
+    if (this.detection.box === "seatbelt" && this.detection.sandboxExec) {
+      const setup = {
+        dataDir: options.dataDir,
+        home: options.home,
+        homeReadOnly: env.OMB_BOT_BOX_HOME_READONLY === "1",
+        codeRoots: options.codeRoots ?? defaultCodeRoots(),
+        engineRoots: options.engineRoots ?? engineInstallRoots(options.dataDir),
+        bridges: [] as BoxBridge[],
+      };
+      this.runner = new BoxRunner({
+        sandboxExec: this.detection.sandboxExec,
+        bridge: { socat: null, bridgeScript: BOX_BRIDGE_SCRIPT, node: process.execPath },
+        setup,
+        denyEnv: options.denyEnv,
+      });
+      // A read-only HOME cannot be used by a bot to plant a program, so the server may keep resolving the engines there.
+      if (!setup.homeReadOnly) {
+        distrustHomePrograms(options.home, [options.dataDir], ["workspaces", "task-workspaces", "engine-homes"].map((name) => join(options.dataDir, name)));
+      }
+      resetPathCache();
+      log("bot box: on (seatbelt filesystem sandbox, shared network)");
+      return this.detection;
+    }
     if (this.detection.box !== "bwrap" || !this.detection.tools) {
       log(`bot box: off (${this.detection.reason})`);
       return this.detection;
@@ -271,7 +305,7 @@ export class BotBox {
 
   /** A relay for one boxed spawn (BoxRequest.relay), or null when bot spawns are not boxed here. */
   async openRelay(): Promise<BoxRelay | null> {
-    if (!this.runner) return null;
+    if (!this.runner || this.detection.box !== "bwrap") return null;
     return openBoxRelay(join(this.runner.setup.dataDir, "box", `relay-${randomBytes(6).toString("hex")}.sock`));
   }
 
@@ -279,7 +313,8 @@ export class BotBox {
    * gate filters it), `ro` paths, and nothing of HOME or the data folder; the launcher binds the one profile it starts
    * Chrome on. bubblewrap's options before `--`; null when turns are not boxed here. */
   browserBox(seccompFd: number, ro: readonly string[]): { bwrap: string; options: string[]; seccomp: string | null } | null {
-    if (!this.runner || !this.detection.tools) return null;
+    // A browser's own gate is bound into the Linux box; macOS has no equivalent yet, so Chrome stays unboxed there.
+    if (!this.runner || !this.detection.tools || this.detection.box !== "bwrap") return null;
     const setup = { ...this.runner.setup, engineRoots: [] };
     const seccomp = this.seccompFile && !setup.mutate?.has("no-seccomp") ? this.seccompFile : null;
     const plan = planBox({ ...setup, seccompFd: seccomp ? seccompFd : undefined }, { command: "chrome", args: [], env: {}, net: "shared", ro });
